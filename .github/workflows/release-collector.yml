@@ -1,0 +1,337 @@
+# 这个工作流放在 HashLink-Beap-Release 仓库中
+# 它会从 SDL3 和 SDL2 仓库的最新 CI 构建中下载产物
+# 然后整理到对应目录并发布 Release
+
+name: Collect Builds & Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdl3_run_id:
+        description: 'SDL3 CI Run ID (留空自动取最新)'
+        required: false
+        type: string
+      sdl2_run_id:
+        description: 'SDL2 CI Run ID (留空自动取最新)'
+        required: false
+        type: string
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # 仓库信息
+  SDL3_REPO: New-NovaFlare-Haxelib/HashLink-Beap-SDL3
+  SDL2_REPO: New-NovaFlare-Haxelib/HashLink-Beap-SDL2
+
+jobs:
+  collect-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+    - name: "SCM Checkout"
+      uses: actions/checkout@v6
+
+    - name: "获取当前日期"
+      id: date
+      run: |
+        echo "DATE=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        echo "TIMESTAMP=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_OUTPUT
+
+    - name: "获取 SDL3 最新 CI Run ID"
+      id: sdl3_run
+      if: inputs.sdl3_run_id == ''
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        RUN_ID=$(gh run list \
+          --repo ${{ env.SDL3_REPO }} \
+          --workflow build.yml \
+          --branch master \
+          --status success \
+          --event push \
+          --limit 1 \
+          --json databaseId \
+          --jq '.[0].databaseId')
+        echo "SDL3_RUN_ID=$RUN_ID" >> $GITHUB_OUTPUT
+        echo "SDL3 latest run: $RUN_ID"
+
+    - name: "获取 SDL2 最新 CI Run ID"
+      id: sdl2_run
+      if: inputs.sdl2_run_id == ''
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        RUN_ID=$(gh run list \
+          --repo ${{ env.SDL2_REPO }} \
+          --workflow build.yml \
+          --branch master \
+          --status success \
+          --event push \
+          --limit 1 \
+          --json databaseId \
+          --jq '.[0].databaseId')
+        echo "SDL2_RUN_ID=$RUN_ID" >> $GITHUB_OUTPUT
+        echo "SDL2 latest run: $RUN_ID"
+
+    - name: "设置 Run ID"
+      id: run_ids
+      run: |
+        SDL3_ID="${{ inputs.sdl3_run_id || steps.sdl3_run.outputs.SDL3_RUN_ID }}"
+        SDL2_ID="${{ inputs.sdl2_run_id || steps.sdl2_run.outputs.SDL2_RUN_ID }}"
+        echo "SDL3_RUN_ID=$SDL3_ID" >> $GITHUB_OUTPUT
+        echo "SDL2_RUN_ID=$SDL2_ID" >> $GITHUB_OUTPUT
+        echo "Using SDL3 run: $SDL3_ID"
+        echo "Using SDL2 run: $SDL2_ID"
+
+    - name: "下载 SDL3 构建产物"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        RUN_ID="${{ steps.run_ids.outputs.SDL3_RUN_ID }}"
+        echo "Downloading artifacts from SDL3 run #$RUN_ID"
+        mkdir -p artifacts/sdl3
+        cd artifacts/sdl3
+
+        # 获取所有产物列表
+        gh run view $RUN_ID --repo ${{ env.SDL3_REPO }} --json artifacts --jq '.artifacts[].name' > artifact_names.txt
+        cat artifact_names.txt
+
+        # 下载所有产物
+        gh run download $RUN_ID --repo ${{ env.SDL3_REPO }} --dir .
+
+        ls -la
+
+    - name: "下载 SDL2 构建产物"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        RUN_ID="${{ steps.run_ids.outputs.SDL2_RUN_ID }}"
+        echo "Downloading artifacts from SDL2 run #$RUN_ID"
+        mkdir -p artifacts/sdl2
+        cd artifacts/sdl2
+
+        # 获取所有产物列表
+        gh run view $RUN_ID --repo ${{ env.SDL2_REPO }} --json artifacts --jq '.artifacts[].name' > artifact_names.txt
+        cat artifact_names.txt
+
+        # 下载所有产物
+        gh run download $RUN_ID --repo ${{ env.SDL2_REPO }} --dir .
+
+        ls -la
+
+    - name: "整理产物到目录结构"
+      run: |
+        DATE="${{ steps.date.outputs.DATE }}"
+        TIMESTAMP="${{ steps.date.outputs.TIMESTAMP }}"
+
+        # 创建目标目录结构
+        mkdir -p "release/SDL3/$DATE"
+        mkdir -p "release/SDL2/$DATE"
+
+        # --- 处理 SDL3 产物 ---
+        echo "=== Processing SDL3 artifacts ==="
+        for artifact_dir in artifacts/sdl3/*/; do
+          artifact_name=$(basename "$artifact_dir")
+          echo "Processing SDL3 artifact: $artifact_name"
+
+          # 查找产物中的压缩包
+          archive_file=$(find "$artifact_dir" -maxdepth 1 -type f \( -name "*.tar.gz" -o -name "*.zip" \) | head -1)
+          if [ -n "$archive_file" ]; then
+            ext="${archive_file##*.}"
+            if [ "$ext" = "gz" ]; then
+              ext="tar.gz"
+            fi
+            cp "$archive_file" "release/SDL3/$DATE/${artifact_name}.${ext}"
+            echo "  -> Copied to release/SDL3/$DATE/${artifact_name}.${ext}"
+          else
+            echo "  -> No archive found in $artifact_dir"
+          fi
+        done
+
+        # --- 处理 SDL2 产物 ---
+        echo "=== Processing SDL2 artifacts ==="
+        for artifact_dir in artifacts/sdl2/*/; do
+          artifact_name=$(basename "$artifact_dir")
+          echo "Processing SDL2 artifact: $artifact_name"
+
+          # 查找产物中的压缩包
+          archive_file=$(find "$artifact_dir" -maxdepth 1 -type f \( -name "*.tar.gz" -o -name "*.zip" \) | head -1)
+          if [ -n "$archive_file" ]; then
+            ext="${archive_file##*.}"
+            if [ "$ext" = "gz" ]; then
+              ext="tar.gz"
+            fi
+            cp "$archive_file" "release/SDL2/$DATE/${artifact_name}.${ext}"
+            echo "  -> Copied to release/SDL2/$DATE/${artifact_name}.${ext}"
+          else
+            echo "  -> No archive found in $artifact_dir"
+          fi
+        done
+
+        # 显示最终目录结构
+        echo ""
+        echo "=== Final release directory structure ==="
+        find release -type f | sort
+
+    - name: "提交到仓库"
+      run: |
+        DATE="${{ steps.date.outputs.DATE }}"
+        TIMESTAMP="${{ steps.date.outputs.TIMESTAMP }}"
+        SDL3_ID="${{ steps.run_ids.outputs.SDL3_RUN_ID }}"
+        SDL2_ID="${{ steps.run_ids.outputs.SDL2_RUN_ID }}"
+
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+        # 只添加 release 目录
+        git add release/
+
+        # 检查是否有变更
+        if git diff --cached --quiet; then
+          echo "No changes to commit"
+          echo "HAS_CHANGES=false" >> $GITHUB_OUTPUT
+        else
+          git commit -m "chore: 更新构建产物 - $DATE
+
+          SDL3 CI Run: ${{ env.SDL3_REPO }}/actions/runs/$SDL3_ID
+          SDL2 CI Run: ${{ env.SDL2_REPO }}/actions/runs/$SDL2_ID"
+          git push
+          echo "HAS_CHANGES=true" >> $GITHUB_OUTPUT
+        fi
+      id: commit
+
+    - name: "创建 Release"
+      if: steps.commit.outputs.HAS_CHANGES == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        DATE="${{ steps.date.outputs.DATE }}"
+        TIMESTAMP="${{ steps.date.outputs.TIMESTAMP }}"
+        SDL3_ID="${{ steps.run_ids.outputs.SDL3_RUN_ID }}"
+        SDL2_ID="${{ steps.run_ids.outputs.SDL2_RUN_ID }}"
+
+        TAG_NAME="build-$TIMESTAMP"
+        RELEASE_NAME="Build $DATE"
+
+        echo "Creating release: $TAG_NAME"
+
+        # 收集所有文件用于 release
+        RELEASE_FILES=()
+
+        # SDL3 文件
+        for f in release/SDL3/$DATE/*; do
+          if [ -f "$f" ]; then
+            basename=$(basename "$f")
+            RELEASE_FILES+=("$f#SDL3/$DATE/$basename")
+          fi
+        done
+
+        # SDL2 文件
+        for f in release/SDL2/$DATE/*; do
+          if [ -f "$f" ]; then
+            basename=$(basename "$f")
+            RELEASE_FILES+=("$f#SDL2/$DATE/$basename")
+          fi
+        done
+
+        # 构建 gh release create 命令
+        CMD="gh release create \"$TAG_NAME\" --title \"$RELEASE_NAME\" --notes \""
+        CMD+="自动收集的 HashLink 构建产物\\n\\n"
+        CMD+="## SDL3 版本\\n"
+        CMD+="来源: ${{ env.SDL3_REPO }}/actions/runs/$SDL3_ID\\n\\n"
+        CMD+="## SDL2 版本\\n"
+        CMD+="来源: ${{ env.SDL2_REPO }}/actions/runs/$SDL2_ID\\n\\n"
+        CMD+="### 包含的构建\\n"
+
+        # 列出 SDL3 文件
+        CMD+="\\n**SDL3:**\\n"
+        for f in release/SDL3/$DATE/*; do
+          if [ -f "$f" ]; then
+            basename=$(basename "$f")
+            CMD+="- \`$basename\`\\n"
+          fi
+        done
+
+        # 列出 SDL2 文件
+        CMD+="\\n**SDL2:**\\n"
+        for f in release/SDL2/$DATE/*; do
+          if [ -f "$f" ]; then
+            basename=$(basename "$f")
+            CMD+="- \`$basename\`\\n"
+          fi
+        done
+
+        CMD+="\""
+
+        # 添加文件参数
+        for f in release/SDL3/$DATE/*; do
+          if [ -f "$f" ]; then
+            basename=$(basename "$f")
+            CMD+=" \"$f#SDL3/$DATE/$basename\""
+          fi
+        done
+        for f in release/SDL2/$DATE/*; do
+          if [ -f "$f" ]; then
+            basename=$(basename "$f")
+            CMD+=" \"$f#SDL2/$DATE/$basename\""
+          fi
+        done
+
+        echo "Running: gh release create..."
+        eval $CMD
+
+    - name: "更新 latest Release"
+      if: steps.commit.outputs.HAS_CHANGES == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        DATE="${{ steps.date.outputs.DATE }}"
+        TIMESTAMP="${{ steps.date.outputs.TIMESTAMP }}"
+
+        # 删除旧的 latest release
+        gh release delete latest --cleanup-tag --yes || true
+
+        # 收集所有文件
+        RELEASE_FILES=()
+        for f in release/SDL3/$DATE/*; do
+          if [ -f "$f" ]; then
+            basename=$(basename "$f")
+            RELEASE_FILES+=("$f#SDL3/$DATE/$basename")
+          fi
+        done
+        for f in release/SDL2/$DATE/*; do
+          if [ -f "$f" ]; then
+            basename=$(basename "$f")
+            RELEASE_FILES+=("$f#SDL2/$DATE/$basename")
+          fi
+        done
+
+        # 创建 latest release
+        CMD="gh release create latest --prerelease --title \"HashLink Nightly Build ($DATE)\" --notes \""
+        CMD+="最新的 HashLink 构建产物\\n\\n"
+        CMD+="更新日期: $DATE\\n\\n"
+        CMD+="## SDL3 版本\\n"
+        CMD+="来源: ${{ env.SDL3_REPO }}/actions/runs/${{ steps.run_ids.outputs.SDL3_RUN_ID }}\\n\\n"
+        CMD+="## SDL2 版本\\n"
+        CMD+="来源: ${{ env.SDL2_REPO }}/actions/runs/${{ steps.run_ids.outputs.SDL2_RUN_ID }}\\n"
+        CMD+="\""
+
+        for f in release/SDL3/$DATE/*; do
+          if [ -f "$f" ]; then
+            basename=$(basename "$f")
+            CMD+=" \"$f#SDL3/$DATE/$basename\""
+          fi
+        done
+        for f in release/SDL2/$DATE/*; do
+          if [ -f "$f" ]; then
+            basename=$(basename "$f")
+            CMD+=" \"$f#SDL2/$DATE/$basename\""
+          fi
+        done
+
+        eval $CMD
