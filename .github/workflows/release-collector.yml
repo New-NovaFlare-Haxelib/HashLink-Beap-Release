@@ -1,7 +1,3 @@
-# 这个工作流放在 HashLink-Beap-Release 仓库中
-# 它会从 SDL3 和 SDL2 仓库的最新 CI 构建中下载产物
-# 然后整理到对应目录并发布 Release
-
 name: Collect Builds & Release
 
 on:
@@ -57,6 +53,16 @@ jobs:
           --limit 1 \
           --json databaseId \
           --jq '.[0].databaseId')
+        if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+          echo "No successful SDL3 run found, trying any status..."
+          RUN_ID=$(gh run list \
+            --repo ${{ env.SDL3_REPO }} \
+            --workflow build.yml \
+            --branch master \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+        fi
         echo "SDL3_RUN_ID=$RUN_ID" >> $GITHUB_OUTPUT
         echo "SDL3 latest run: $RUN_ID"
 
@@ -75,6 +81,16 @@ jobs:
           --limit 1 \
           --json databaseId \
           --jq '.[0].databaseId')
+        if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+          echo "No successful SDL2 run found, trying any status..."
+          RUN_ID=$(gh run list \
+            --repo ${{ env.SDL2_REPO }} \
+            --workflow build.yml \
+            --branch master \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+        fi
         echo "SDL2_RUN_ID=$RUN_ID" >> $GITHUB_OUTPUT
         echo "SDL2 latest run: $RUN_ID"
 
@@ -95,16 +111,16 @@ jobs:
         RUN_ID="${{ steps.run_ids.outputs.SDL3_RUN_ID }}"
         echo "Downloading artifacts from SDL3 run #$RUN_ID"
         mkdir -p artifacts/sdl3
-        cd artifacts/sdl3
 
-        # 获取所有产物列表
-        gh run view $RUN_ID --repo ${{ env.SDL3_REPO }} --json artifacts --jq '.artifacts[].name' > artifact_names.txt
-        cat artifact_names.txt
+        # 直接用 gh run download 下载所有产物
+        gh run download "$RUN_ID" --repo ${{ env.SDL3_REPO }} --dir artifacts/sdl3
 
-        # 下载所有产物
-        gh run download $RUN_ID --repo ${{ env.SDL3_REPO }} --dir .
-
-        ls -la
+        echo "=== SDL3 artifacts ==="
+        ls -la artifacts/sdl3/
+        for d in artifacts/sdl3/*/; do
+          echo "  $(basename $d):"
+          ls -la "$d"
+        done
 
     - name: "下载 SDL2 构建产物"
       env:
@@ -113,16 +129,16 @@ jobs:
         RUN_ID="${{ steps.run_ids.outputs.SDL2_RUN_ID }}"
         echo "Downloading artifacts from SDL2 run #$RUN_ID"
         mkdir -p artifacts/sdl2
-        cd artifacts/sdl2
 
-        # 获取所有产物列表
-        gh run view $RUN_ID --repo ${{ env.SDL2_REPO }} --json artifacts --jq '.artifacts[].name' > artifact_names.txt
-        cat artifact_names.txt
+        # 直接用 gh run download 下载所有产物
+        gh run download "$RUN_ID" --repo ${{ env.SDL2_REPO }} --dir artifacts/sdl2
 
-        # 下载所有产物
-        gh run download $RUN_ID --repo ${{ env.SDL2_REPO }} --dir .
-
-        ls -la
+        echo "=== SDL2 artifacts ==="
+        ls -la artifacts/sdl2/
+        for d in artifacts/sdl2/*/; do
+          echo "  $(basename $d):"
+          ls -la "$d"
+        done
 
     - name: "整理产物到目录结构"
       run: |
