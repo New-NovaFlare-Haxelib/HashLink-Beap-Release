@@ -165,6 +165,6 @@ jobs:
         if git diff --cached --quiet; then
           echo "No changes to commit"
         else
-          git commit -m "chore: 更新构建产物 - $DATE
+          git commit -m "chore: 更新构建产物 - $DATE"
           git push
         fi
