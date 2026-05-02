@@ -166,8 +166,5 @@ jobs:
           echo "No changes to commit"
         else
           git commit -m "chore: 更新构建产物 - $DATE
-        
-SDL3 CI Run: ${{ env.SDL3_REPO }}/actions/runs/$SDL3_ID
-SDL2 CI Run: ${{ env.SDL2_REPO }}/actions/runs/$SDL2_ID"
           git push
         fi
