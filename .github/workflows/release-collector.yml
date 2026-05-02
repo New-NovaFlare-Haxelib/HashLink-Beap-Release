@@ -7,7 +7,6 @@ on:
         description: 'SDL3 CI Run ID (留空自动取最新)'
         required: false
         type: string
-        
       sdl2_run_id:
         description: 'SDL2 CI Run ID (留空自动取最新)'
         required: false
@@ -37,6 +36,7 @@ jobs:
       id: date
       run: |
         echo "DATE=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        echo "TIMESTAMP=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_OUTPUT
 
     - name: "获取 SDL3 最新 CI Run ID"
       id: sdl3_run
@@ -54,6 +54,7 @@ jobs:
           --json databaseId \
           --jq '.[0].databaseId')
         if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+          echo "No successful SDL3 run found, trying any status..."
           RUN_ID=$(gh run list \
             --repo ${{ env.SDL3_REPO }} \
             --workflow build.yml \
@@ -81,6 +82,7 @@ jobs:
           --json databaseId \
           --jq '.[0].databaseId')
         if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+          echo "No successful SDL2 run found, trying any status..."
           RUN_ID=$(gh run list \
             --repo ${{ env.SDL2_REPO }} \
             --workflow build.yml \
@@ -109,7 +111,15 @@ jobs:
         RUN_ID="${{ steps.run_ids.outputs.SDL3_RUN_ID }}"
         echo "Downloading artifacts from SDL3 run #$RUN_ID"
         mkdir -p artifacts/sdl3
+
         gh run download "$RUN_ID" --repo ${{ env.SDL3_REPO }} --dir artifacts/sdl3
+
+        echo "=== SDL3 artifacts ==="
+        ls -la artifacts/sdl3/
+        for d in artifacts/sdl3/*/; do
+          echo "  $(basename $d):"
+          ls -la "$d"
+        done
 
     - name: "下载 SDL2 构建产物"
       env:
@@ -118,53 +128,93 @@ jobs:
         RUN_ID="${{ steps.run_ids.outputs.SDL2_RUN_ID }}"
         echo "Downloading artifacts from SDL2 run #$RUN_ID"
         mkdir -p artifacts/sdl2
+
         gh run download "$RUN_ID" --repo ${{ env.SDL2_REPO }} --dir artifacts/sdl2
+
+        echo "=== SDL2 artifacts ==="
+        ls -la artifacts/sdl2/
+        for d in artifacts/sdl2/*/; do
+          echo "  $(basename $d):"
+          ls -la "$d"
+        done
 
     - name: "整理产物到目录结构"
       run: |
         DATE="${{ steps.date.outputs.DATE }}"
+        TIMESTAMP="${{ steps.date.outputs.TIMESTAMP }}"
+
         # 创建目标目录结构
         mkdir -p "release/SDL3/$DATE"
         mkdir -p "release/SDL2/$DATE"
-        
-        # 处理 SDL3 产物
+
+        # --- 处理 SDL3 产物 ---
+        echo "=== Processing SDL3 artifacts ==="
         for artifact_dir in artifacts/sdl3/*/; do
           artifact_name=$(basename "$artifact_dir")
+          echo "Processing SDL3 artifact: $artifact_name"
+
           # 查找产物中的压缩包
           archive_file=$(find "$artifact_dir" -maxdepth 1 -type f \( -name "*.tar.gz" -o -name "*.zip" \) | head -1)
           if [ -n "$archive_file" ]; then
-            cp "$archive_file" "release/SDL3/$DATE/"
-            echo "  -> Copied to release/SDL3/$DATE/"
+            ext="${archive_file##*.}"
+            if [ "$ext" = "gz" ]; then
+              ext="tar.gz"
+            fi
+            cp "$archive_file" "release/SDL3/$DATE/${artifact_name}.${ext}"
+            echo "  -> Copied to release/SDL3/$DATE/${artifact_name}.${ext}"
+          else
+            echo "  -> No archive found in $artifact_dir"
           fi
         done
-        
-        # 处理 SDL2 产物
+
+        # --- 处理 SDL2 产物 ---
+        echo "=== Processing SDL2 artifacts ==="
         for artifact_dir in artifacts/sdl2/*/; do
           artifact_name=$(basename "$artifact_dir")
+          echo "Processing SDL2 artifact: $artifact_name"
+
+          # 查找产物中的压缩包
           archive_file=$(find "$artifact_dir" -maxdepth 1 -type f \( -name "*.tar.gz" -o -name "*.zip" \) | head -1)
           if [ -n "$archive_file" ]; then
-            cp "$archive_file" "release/SDL2/$DATE/"
-            echo "  -> Copied to release/SDL2/$DATE/"
+            ext="${archive_file##*.}"
+            if [ "$ext" = "gz" ]; then
+              ext="tar.gz"
+            fi
+            cp "$archive_file" "release/SDL2/$DATE/${artifact_name}.${ext}"
+            echo "  -> Copied to release/SDL2/$DATE/${artifact_name}.${ext}"
+          else
+            echo "  -> No archive found in $artifact_dir"
           fi
         done
-        
-        echo "Final release directory structure:"
+
+        # 显示最终目录结构
+        echo ""
+        echo "=== Final release directory structure ==="
         find release -type f | sort
 
     - name: "提交到仓库"
       run: |
         DATE="${{ steps.date.outputs.DATE }}"
+        TIMESTAMP="${{ steps.date.outputs.TIMESTAMP }}"
         SDL3_ID="${{ steps.run_ids.outputs.SDL3_RUN_ID }}"
         SDL2_ID="${{ steps.run_ids.outputs.SDL2_RUN_ID }}"
-        
+
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        
+
+        # 只添加 release 目录
         git add release/
-        
+
+        # 检查是否有变更
         if git diff --cached --quiet; then
           echo "No changes to commit"
+          echo "HAS_CHANGES=false" >> $GITHUB_OUTPUT
         else
-          git commit -m "chore: 更新构建产物 - $DATE"
+          git commit -m "chore: 更新构建产物 - $DATE
+
+          SDL3 CI Run: ${{ env.SDL3_REPO }}/actions/runs/$SDL3_ID
+          SDL2 CI Run: ${{ env.SDL2_REPO }}/actions/runs/$SDL2_ID"
           git push
+          echo "HAS_CHANGES=true" >> $GITHUB_OUTPUT
         fi
+      id: commit
